@@ -261,6 +261,230 @@ No code changes are needed after adding connections or queries — just restart 
 
 ---
 
+## Running on Linux with Kerberos Authentication
+
+Kerberos lets a Linux service account connect to SQL Server using Active Directory tickets — no password stored anywhere in the config. The MSSQL JDBC driver ships a pure-Java Kerberos implementation (`authenticationScheme=JavaKerberos`) so **no native DLL is needed on Linux**, unlike the Windows Integrated Security path.
+
+---
+
+### How the JDBC driver resolves a Kerberos connection
+
+```
+Application (JVM)
+  │
+  │  DataSource.getConnection()
+  ▼
+MSSQL JDBC Driver
+  │  sees: integratedSecurity=true;authenticationScheme=JavaKerberos
+  │
+  │  1. Calls JAAS with login context "SQLJDBCDriver"
+  ▼
+JAAS / Krb5LoginModule
+  │  Reads /etc/krb5.conf to locate the KDC
+  │
+  ├─── keytab mode (service account) ──────────────────────────────┐
+  │    reads keytab file, decrypts principal's long-term key        │
+  │    sends AS-REQ to KDC                                          │
+  │                                                                 │
+  └─── ticket-cache mode (kinit) ───────────────────────────────── ┘
+       reads existing TGT from /tmp/krb5cc_<uid>
+  │
+  ▼
+KDC (Active Directory Domain Controller) — AS exchange
+  │  validates the keytab key / cached TGT
+  │  issues a Ticket Granting Ticket (TGT) for the service principal
+  │
+  ▼
+MSSQL JDBC Driver — TGS exchange
+  │  presents TGT to KDC and requests a Service Ticket for
+  │  MSSQLSvc/<sql-server-host>:<port>@REALM
+  │
+  ▼
+KDC
+  │  issues Service Ticket encrypted with SQL Server's secret key
+  │
+  ▼
+MSSQL JDBC Driver — TDS login
+  │  sends Service Ticket inside the TDS pre-login / login7 packet
+  │  to SQL Server on port 1433
+  │
+  ▼
+SQL Server
+  │  decrypts the Service Ticket using its own keytab / AD password
+  │  verifies the ticket, extracts the client's AD identity
+  │  applies SQL Server login permissions for that AD account
+  │
+  ▼
+Connection established — queries run as the service account identity
+```
+
+---
+
+### Step-by-step setup
+
+#### 1. Install Kerberos client tools
+
+```bash
+# RHEL / CentOS / Fedora
+sudo yum install -y krb5-workstation
+
+# Ubuntu / Debian
+sudo apt-get install -y krb5-user
+```
+
+#### 2. Configure `/etc/krb5.conf`
+
+Replace `DOMAIN.COM`, `dc1.domain.com`, and `dc2.domain.com` with your AD values.
+
+```ini
+[libdefaults]
+    default_realm     = DOMAIN.COM
+    dns_lookup_kdc    = true
+    dns_lookup_realm  = false
+    forwardable       = true
+    renewable         = true
+
+[realms]
+    DOMAIN.COM = {
+        kdc          = dc1.domain.com
+        kdc          = dc2.domain.com
+        admin_server = dc1.domain.com
+    }
+
+[domain_realm]
+    .domain.com = DOMAIN.COM
+    domain.com  = DOMAIN.COM
+```
+
+Verify it works before proceeding:
+
+```bash
+kinit svc-spring@DOMAIN.COM
+klist
+```
+
+#### 3. Create a keytab for the service account
+
+Run this on a Windows Domain Controller (or delegate it to your AD team). The keytab lets the Linux service authenticate without ever storing a plain-text password.
+
+```powershell
+# On the Windows DC
+ktpass `
+  -out svc-spring.keytab `
+  -mapuser svc-spring@DOMAIN.COM `
+  -pass ServiceAccountPassword! `
+  -ptype KRB5_NT_PRINCIPAL `
+  -princ svc-spring@DOMAIN.COM `
+  -crypto AES256-SHA1
+```
+
+Copy the file to the Linux host and lock down its permissions:
+
+```bash
+sudo cp svc-spring.keytab /etc/spring-app/svc-spring.keytab
+sudo chmod 400 /etc/spring-app/svc-spring.keytab
+sudo chown springapp:springapp /etc/spring-app/svc-spring.keytab
+```
+
+Verify the keytab resolves correctly:
+
+```bash
+kinit -kt /etc/spring-app/svc-spring.keytab svc-spring@DOMAIN.COM
+klist
+```
+
+#### 4. Create a JAAS configuration file
+
+JAAS tells the JDBC driver how to obtain a Kerberos ticket. Create `/etc/spring-app/jaas.conf`:
+
+```
+SQLJDBCDriver {
+    com.sun.security.auth.module.Krb5LoginModule required
+    useKeyTab=true
+    keyTab="/etc/spring-app/svc-spring.keytab"
+    principal="svc-spring@DOMAIN.COM"
+    doNotPrompt=true
+    storeKey=true
+    isInitiator=true;
+};
+```
+
+> If you prefer using a pre-existing `kinit` ticket cache instead of a keytab (e.g. during development), replace the block body with:
+> ```
+>     useTicketCache=true
+>     doNotPrompt=true;
+> ```
+
+#### 5. Configure `application.yaml`
+
+Use `authenticationScheme=JavaKerberos` and `integratedSecurity=true`. Omit `username` and `password`.
+The `serverSpn` value must match the SPN registered for the SQL Server instance in Active Directory.
+
+```yaml
+databases:
+  connections:
+    corp-db:
+      url: >-
+        jdbc:sqlserver://sql-server.domain.com:1433;
+        databaseName=corpdb;
+        integratedSecurity=true;
+        authenticationScheme=JavaKerberos;
+        serverSpn=MSSQLSvc/sql-server.domain.com:1433@DOMAIN.COM;
+        encrypt=true;
+        trustServerCertificate=false
+      driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+```
+
+> **Finding the SPN** — run this on any domain-joined Windows machine or DC:
+> ```powershell
+> setspn -L sql-server$
+> # or
+> setspn -Q MSSQLSvc/sql-server.domain.com:1433
+> ```
+
+#### 6. Run the service with Kerberos JVM arguments
+
+Pass the JAAS config and Kerberos config paths as JVM system properties:
+
+```bash
+./mvnw spring-boot:run \
+  -Djava.security.auth.login.config=/etc/spring-app/jaas.conf \
+  -Djava.security.krb5.conf=/etc/krb5.conf
+```
+
+Or set them in `JAVA_TOOL_OPTIONS` so they apply to every JVM invocation on the host:
+
+```bash
+export JAVA_TOOL_OPTIONS="\
+  -Djava.security.auth.login.config=/etc/spring-app/jaas.conf \
+  -Djava.security.krb5.conf=/etc/krb5.conf"
+./mvnw spring-boot:run
+```
+
+For a `systemd` service unit, add them to the `Environment` directive:
+
+```ini
+[Service]
+User=springapp
+Environment="JAVA_TOOL_OPTIONS=-Djava.security.auth.login.config=/etc/spring-app/jaas.conf -Djava.security.krb5.conf=/etc/krb5.conf"
+ExecStart=/opt/spring-app/bin/sql-mapper-api.jar
+```
+
+---
+
+### Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|-------------|-----|
+| `No credentials cache file found` | No TGT in cache and no keytab configured | Run `kinit -kt <keytab> <principal>` or fix `jaas.conf` |
+| `KrbException: Cannot locate default realm` | `/etc/krb5.conf` missing or `default_realm` not set | Set `default_realm` in `[libdefaults]` |
+| `Server not found in Kerberos database` | Wrong or missing SPN on the SQL Server AD account | Register SPN: `setspn -A MSSQLSvc/host:1433 domain\svc-sql` |
+| `Encryption type not supported` | Keytab uses an older cipher (e.g. RC4) | Recreate keytab with `-crypto AES256-SHA1` |
+| `GSS-API Error: No valid credentials provided` | Keytab principal does not match `principal=` in `jaas.conf` | Ensure they are identical including case |
+| `Connection refused` | Port 1433 blocked or SQL Server not listening | Check firewall and SQL Server network configuration |
+
+---
+
 ## Running the Service
 
 ```bash
