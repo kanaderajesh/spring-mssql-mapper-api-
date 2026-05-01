@@ -1,0 +1,21 @@
+spring:
+  datasource:
+    url: jdbc:sqlserver://localhost:1433;databaseName=testdb;encrypt=false;trustServerCertificate=true
+    username: sa
+    password: YourPassword123
+    driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+
+queries:
+  definitions:
+    get-all-users:
+      sql: "SELECT id, name, email, created_at FROM users"
+      description: "Retrieve all users"
+    get-active-users:
+      sql: "SELECT id, name, email FROM users WHERE active = 1"
+      description: "Retrieve all active users"
+    get-all-products:
+      sql: "SELECT id, name, price, category, stock FROM products"
+      description: "Retrieve all products"
+    get-active-orders:
+      sql: "SELECT id, customer_id, total_amount, status, created_at FROM orders WHERE status = 'ACTIVE'"
+      description: "Retrieve all active orders"
