@@ -1,9 +1,15 @@
-spring:
-  datasource:
-    url: jdbc:sqlserver://localhost:1433;databaseName=testdb;encrypt=false;trustServerCertificate=true
-    username: sa
-    password: YourPassword123
-    driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+databases:
+  connections:
+    primary-db:
+      url: jdbc:sqlserver://localhost:1433;databaseName=testdb;encrypt=false;trustServerCertificate=true
+      username: sa
+      password: YourPassword123
+      driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+    analytics-db:
+      url: jdbc:sqlserver://localhost:1433;databaseName=analyticsdb;encrypt=false;trustServerCertificate=true
+      username: sa
+      password: YourPassword123
+      driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
 
 queries:
   definitions:

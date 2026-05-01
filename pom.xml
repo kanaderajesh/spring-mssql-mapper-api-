@@ -19,6 +19,7 @@
 
     <properties>
         <java.version>17</java.version>
+        <mssql-jdbc.version>13.4.0.jre11</mssql-jdbc.version>
     </properties>
 
     <dependencies>
