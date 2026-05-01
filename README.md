@@ -129,6 +129,67 @@ queries:
       description: "Retrieve all active orders"
 ```
 
+#### Multi-line queries with JOIN
+
+For complex queries use the YAML **literal block scalar** (`|`). Each line of the SQL is indented under the `sql` key and the newlines are preserved exactly as written.
+
+```yaml
+queries:
+  definitions:
+    get-orders-with-customer:
+      description: "Orders joined with customer and product details"
+      sql: |
+        SELECT
+            o.id            AS order_id,
+            o.status        AS order_status,
+            o.total_amount,
+            o.created_at    AS order_date,
+            c.id            AS customer_id,
+            c.name          AS customer_name,
+            c.email         AS customer_email,
+            p.id            AS product_id,
+            p.name          AS product_name,
+            p.price         AS unit_price
+        FROM orders o
+        INNER JOIN customers c
+            ON o.customer_id = c.id
+        INNER JOIN order_items oi
+            ON oi.order_id = o.id
+        INNER JOIN products p
+            ON oi.product_id = p.id
+        WHERE o.status = 'ACTIVE'
+        ORDER BY o.created_at DESC
+```
+
+Calling this query with optional column filtering:
+
+```bash
+# All columns
+curl -s http://localhost:8080/api/query/primary-db/get-orders-with-customer
+
+# Only customer and order summary columns
+curl -s "http://localhost:8080/api/query/primary-db/get-orders-with-customer?fields=order_id,customer_name,total_amount,order_date"
+```
+
+Response for the filtered call:
+
+```json
+[
+  {
+    "order_id": 101,
+    "customer_name": "Alice Smith",
+    "total_amount": 149.99,
+    "order_date": "2024-04-30T09:15:00"
+  },
+  {
+    "order_id": 98,
+    "customer_name": "Bob Jones",
+    "total_amount": 59.50,
+    "order_date": "2024-04-28T14:00:00"
+  }
+]
+```
+
 No code changes are needed after adding connections or queries — just restart the service.
 
 ---
