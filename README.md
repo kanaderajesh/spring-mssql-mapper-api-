@@ -1,34 +1,40 @@
 # Spring MSSQL Mapper API
 
-A Spring Boot REST API that executes pre-configured SQL queries against a Microsoft SQL Server database and returns results as JSON. No code changes are needed to add or modify queries — everything is declared in `application.yaml`.
+A Spring Boot REST API that executes pre-configured SQL queries against one or more Microsoft SQL Server databases and returns results as JSON. Both database connections and SQL queries are declared entirely in `application.yaml` — no code changes are needed to add either.
 
 ---
 
 ## How It Works
 
-1. SQL queries are registered in `application.yaml`, each with a unique ID and an optional description.
-2. A client calls a REST endpoint with the query ID and, optionally, a comma-separated list of column names to return.
-3. The service looks up the SQL by ID, executes it via JDBC against MSSQL, filters the result set to the requested columns (if specified), and returns the rows as a JSON array.
+1. Database connections are registered in `application.yaml` under `databases.connections`, each with a unique connection ID.
+2. SQL queries are registered under `queries.definitions`, each with a unique query ID.
+3. A client calls a REST endpoint with both a **connection ID** and a **query ID**, plus an optional comma-separated list of column names to return.
+4. The service resolves the correct `DataSource` by connection ID, looks up the SQL by query ID, executes it via JDBC, filters columns (if requested), and returns the rows as a JSON array.
 
 ```
 Client
   │
-  │  GET /api/query/{queryId}?fields=col1,col2
+  │  GET /api/query/{connectionId}/{queryId}?fields=col1,col2
   ▼
 QueryController
   │
-  ▼
-QueryService  ──── looks up SQL by ID ────▶  QueryProperties (application.yaml)
+  ├── looks up JdbcTemplate by connectionId ──▶  DataSourceRegistry
+  │                                                   │
+  │                                                   └── DatabaseProperties (application.yaml)
+  │                                                         databases.connections.*
+  │
+  ├── looks up SQL by queryId ──────────────▶  QueryProperties (application.yaml)
+  │                                                   queries.definitions.*
   │
   │  JdbcTemplate.queryForList(sql)
   ▼
-MSSQL Database
+Target MSSQL Database
   │
   ▼
-Column filter (optional)
+Column filter (optional, case-insensitive)
   │
   ▼
-JSON Response [ { col1: ..., col2: ... }, ... ]
+JSON Response  [ { col1: ..., col2: ... }, ... ]
 ```
 
 ---
@@ -41,54 +47,67 @@ sql-mapper-api/
 └── src/
     └── main/
         ├── java/com/example/sqlmapper/
-        │   ├── SqlMapperApplication.java          # Entry point
+        │   ├── SqlMapperApplication.java              # Entry point; disables DataSource auto-config
         │   ├── config/
-        │   │   └── QueryProperties.java           # Binds queries.definitions from YAML
+        │   │   ├── DatabaseProperties.java            # Binds databases.connections from YAML
+        │   │   ├── DataSourceRegistry.java            # Builds and holds one JdbcTemplate per connection
+        │   │   └── QueryProperties.java               # Binds queries.definitions from YAML
         │   ├── controller/
-        │   │   └── QueryController.java           # REST endpoints
+        │   │   └── QueryController.java               # REST endpoints
         │   ├── service/
-        │   │   └── QueryService.java              # JDBC execution + column filtering
+        │   │   └── QueryService.java                  # Resolves connection, executes query, filters columns
         │   ├── model/
-        │   │   ├── QueryInfo.java                 # Query ID + description DTO
-        │   │   └── ErrorResponse.java             # Structured error body
+        │   │   ├── ConnectionInfo.java                # Connection ID DTO
+        │   │   ├── QueryInfo.java                     # Query ID + description DTO
+        │   │   └── ErrorResponse.java                 # Structured error body
         │   └── exception/
-        │       └── GlobalExceptionHandler.java    # JSON error responses
+        │       └── GlobalExceptionHandler.java        # JSON error responses
         └── resources/
-            └── application.yaml                   # DB config + query definitions
+            └── application.yaml                       # All connections + query definitions
 ```
 
 ---
 
 ## Tech Stack
 
-| Component        | Technology                          |
-|-----------------|--------------------------------------|
-| Framework        | Spring Boot 3.2.5                   |
-| Language         | Java 17                             |
-| Database         | Microsoft SQL Server                |
-| JDBC             | Spring JDBC / JdbcTemplate          |
-| Build tool       | Maven                               |
+| Component     | Technology                       |
+|--------------|-----------------------------------|
+| Framework     | Spring Boot 3.2.5                |
+| Language      | Java 17                          |
+| Database      | Microsoft SQL Server             |
+| JDBC          | Spring JDBC / JdbcTemplate       |
+| Connection pool | HikariCP (bundled with Spring Boot) |
+| Build tool    | Maven                            |
 
 ---
 
 ## Configuration
 
-### Database connection
+All configuration lives in `src/main/resources/application.yaml`.
 
-Edit `src/main/resources/application.yaml`:
+### Registering database connections
+
+Each entry under `databases.connections` gets its own connection pool. The map key is the **connection ID** used in the URL.
 
 ```yaml
-spring:
-  datasource:
-    url: jdbc:sqlserver://localhost:1433;databaseName=testdb;encrypt=false;trustServerCertificate=true
-    username: sa
-    password: YourPassword123
-    driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+databases:
+  connections:
+    primary-db:
+      url: jdbc:sqlserver://localhost:1433;databaseName=testdb;encrypt=false;trustServerCertificate=true
+      username: sa
+      password: YourPassword123
+      driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+
+    analytics-db:
+      url: jdbc:sqlserver://analytics-host:1433;databaseName=analyticsdb;encrypt=false;trustServerCertificate=true
+      username: sa
+      password: YourPassword456
+      driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
 ```
 
 ### Registering SQL queries
 
-Add entries under `queries.definitions`. Each key is the **query ID** used in the URL.
+Each entry under `queries.definitions` is available to **all** connections. The map key is the **query ID** used in the URL.
 
 ```yaml
 queries:
@@ -110,7 +129,7 @@ queries:
       description: "Retrieve all active orders"
 ```
 
-No code changes are needed after adding a new query — just restart the service.
+No code changes are needed after adding connections or queries — just restart the service.
 
 ---
 
@@ -126,7 +145,32 @@ The API starts on `http://localhost:8080`.
 
 ## API Endpoints
 
-### 1. List all registered queries
+### 1. List all registered connections
+
+Returns all configured database connection IDs.
+
+```
+GET /api/connections
+```
+
+#### curl
+
+```bash
+curl -s http://localhost:8080/api/connections
+```
+
+#### Response `200 OK`
+
+```json
+[
+  { "id": "primary-db" },
+  { "id": "analytics-db" }
+]
+```
+
+---
+
+### 2. List all registered queries
 
 Returns all configured query IDs and their descriptions.
 
@@ -144,43 +188,32 @@ curl -s http://localhost:8080/api/queries
 
 ```json
 [
-  {
-    "id": "get-all-users",
-    "description": "Retrieve all users"
-  },
-  {
-    "id": "get-active-users",
-    "description": "Retrieve all active users"
-  },
-  {
-    "id": "get-all-products",
-    "description": "Retrieve all products"
-  },
-  {
-    "id": "get-active-orders",
-    "description": "Retrieve all active orders"
-  }
+  { "id": "get-all-users",     "description": "Retrieve all users" },
+  { "id": "get-active-users",  "description": "Retrieve all active users" },
+  { "id": "get-all-products",  "description": "Retrieve all products" },
+  { "id": "get-active-orders", "description": "Retrieve all active orders" }
 ]
 ```
 
 ---
 
-### 2. Execute a query — all columns
+### 3. Execute a query — all columns
 
-Runs the SQL registered under `{queryId}` and returns every column.
+Runs the SQL registered under `{queryId}` on the database identified by `{connectionId}` and returns every column.
 
 ```
-GET /api/query/{queryId}
+GET /api/query/{connectionId}/{queryId}
 ```
 
-| Parameter  | Type        | Required | Description                         |
-|------------|-------------|----------|-------------------------------------|
-| `queryId`  | path param  | Yes      | The ID defined in `application.yaml` |
+| Parameter      | Type       | Required | Description                                    |
+|----------------|------------|----------|------------------------------------------------|
+| `connectionId` | path param | Yes      | Database connection ID from `application.yaml` |
+| `queryId`      | path param | Yes      | Query ID from `application.yaml`               |
 
 #### curl
 
 ```bash
-curl -s http://localhost:8080/api/query/get-all-users
+curl -s http://localhost:8080/api/query/primary-db/get-all-users
 ```
 
 #### Response `200 OK`
@@ -202,25 +235,32 @@ curl -s http://localhost:8080/api/query/get-all-users
 ]
 ```
 
+#### curl — same query on a different database
+
+```bash
+curl -s http://localhost:8080/api/query/analytics-db/get-all-users
+```
+
 ---
 
-### 3. Execute a query — selected columns only
+### 4. Execute a query — selected columns only
 
 Same as above but the response is filtered to the columns listed in `fields`. Column matching is **case-insensitive**.
 
 ```
-GET /api/query/{queryId}?fields=col1,col2,...
+GET /api/query/{connectionId}/{queryId}?fields=col1,col2,...
 ```
 
-| Parameter  | Type         | Required | Description                                          |
-|------------|--------------|----------|------------------------------------------------------|
-| `queryId`  | path param   | Yes      | The ID defined in `application.yaml`                 |
-| `fields`   | query param  | No       | Comma-separated column names to include in the response |
+| Parameter      | Type        | Required | Description                                          |
+|----------------|-------------|----------|------------------------------------------------------|
+| `connectionId` | path param  | Yes      | Database connection ID from `application.yaml`       |
+| `queryId`      | path param  | Yes      | Query ID from `application.yaml`                     |
+| `fields`       | query param | No       | Comma-separated column names to include in the response |
 
 #### curl — single field
 
 ```bash
-curl -s "http://localhost:8080/api/query/get-all-users?fields=name"
+curl -s "http://localhost:8080/api/query/primary-db/get-all-users?fields=name"
 ```
 
 #### Response `200 OK`
@@ -235,7 +275,7 @@ curl -s "http://localhost:8080/api/query/get-all-users?fields=name"
 #### curl — multiple fields
 
 ```bash
-curl -s "http://localhost:8080/api/query/get-all-users?fields=id,email"
+curl -s "http://localhost:8080/api/query/primary-db/get-all-users?fields=id,email"
 ```
 
 #### Response `200 OK`
@@ -247,10 +287,10 @@ curl -s "http://localhost:8080/api/query/get-all-users?fields=id,email"
 ]
 ```
 
-#### curl — products with price and category
+#### curl — products from analytics DB, specific columns
 
 ```bash
-curl -s "http://localhost:8080/api/query/get-all-products?fields=name,price,category"
+curl -s "http://localhost:8080/api/query/analytics-db/get-all-products?fields=name,price,category"
 ```
 
 #### Response `200 OK`
@@ -268,10 +308,26 @@ curl -s "http://localhost:8080/api/query/get-all-products?fields=name,price,cate
 
 All errors are returned as a structured JSON body.
 
+### 404 — Connection ID not found
+
+```bash
+curl -s http://localhost:8080/api/query/unknown-db/get-all-users
+```
+
+```json
+{
+  "status": 404,
+  "error": "Not Found",
+  "message": "Connection id 'unknown-db' is not configured",
+  "path": "/api/query/unknown-db/get-all-users",
+  "timestamp": "2024-05-01T10:00:00Z"
+}
+```
+
 ### 404 — Query ID not found
 
 ```bash
-curl -s http://localhost:8080/api/query/does-not-exist
+curl -s http://localhost:8080/api/query/primary-db/does-not-exist
 ```
 
 ```json
@@ -279,7 +335,7 @@ curl -s http://localhost:8080/api/query/does-not-exist
   "status": 404,
   "error": "Not Found",
   "message": "Query id 'does-not-exist' is not configured",
-  "path": "/api/query/does-not-exist",
+  "path": "/api/query/primary-db/does-not-exist",
   "timestamp": "2024-05-01T10:00:00Z"
 }
 ```
@@ -291,7 +347,7 @@ curl -s http://localhost:8080/api/query/does-not-exist
   "status": 500,
   "error": "Database Error",
   "message": "Invalid object name 'users'.",
-  "path": "/api/query/get-all-users",
+  "path": "/api/query/primary-db/get-all-users",
   "timestamp": "2024-05-01T10:00:01Z"
 }
 ```
@@ -300,7 +356,10 @@ curl -s http://localhost:8080/api/query/does-not-exist
 
 ## Design Decisions
 
-- **No ORM / entity classes** — `JdbcTemplate.queryForList()` returns `List<Map<String, Object>>` which serialises directly to JSON without needing model classes per table.
-- **Column filtering in Java, not SQL** — the full query runs as written in the YAML; columns are stripped from the result map in the service layer. This keeps the YAML queries simple and avoids dynamic SQL construction.
-- **Case-insensitive field matching** — both the requested field names and the column names from the result set are lowercased before comparison, so `?fields=Email` matches a column named `email` or `EMAIL`.
-- **Centralised error handling** — `GlobalExceptionHandler` catches `ResponseStatusException` (unknown query ID), `DataAccessException` (JDBC failures), and any other exception, converting them all to a consistent JSON error shape.
+- **One HikariCP pool per connection ID** — `DataSourceRegistry` builds a `HikariDataSource` for each entry in `databases.connections` at startup and holds a corresponding `JdbcTemplate`. Pools are closed gracefully on shutdown via `DisposableBean`.
+- **Spring DataSource auto-config is disabled** — because the service manages its own `DataSource` beans, `DataSourceAutoConfiguration`, `JdbcTemplateAutoConfiguration`, and `DataSourceTransactionManagerAutoConfiguration` are excluded so Spring Boot doesn't try to create a default single-datasource context.
+- **Queries are connection-agnostic** — a query defined once in `queries.definitions` can be run against any registered connection, useful for running the same query across environments (e.g. prod vs reporting replica).
+- **No ORM / entity classes** — `JdbcTemplate.queryForList()` returns `List<Map<String, Object>>` which serialises directly to JSON without needing per-table model classes.
+- **Column filtering in Java, not SQL** — the full configured query is executed as-is; columns are stripped from the result map in the service layer, avoiding any dynamic SQL construction.
+- **Case-insensitive field matching** — both the requested field names and the JDBC column names are lowercased before comparison, so `?fields=Email` matches `email`, `EMAIL`, or `Email`.
+- **Centralised error handling** — `GlobalExceptionHandler` converts `ResponseStatusException` (unknown connection/query ID), `DataAccessException` (JDBC failures), and unexpected exceptions into a consistent JSON error shape.

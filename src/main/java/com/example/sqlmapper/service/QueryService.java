@@ -12,21 +12,25 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.example.sqlmapper.config.DataSourceRegistry;
 import com.example.sqlmapper.config.QueryProperties;
+import com.example.sqlmapper.model.ConnectionInfo;
 import com.example.sqlmapper.model.QueryInfo;
 
 @Service
 public class QueryService {
 
-    private final JdbcTemplate jdbcTemplate;
+    private final DataSourceRegistry dataSourceRegistry;
     private final QueryProperties queryProperties;
 
-    public QueryService(JdbcTemplate jdbcTemplate, QueryProperties queryProperties) {
-        this.jdbcTemplate = jdbcTemplate;
+    public QueryService(DataSourceRegistry dataSourceRegistry, QueryProperties queryProperties) {
+        this.dataSourceRegistry = dataSourceRegistry;
         this.queryProperties = queryProperties;
     }
 
-    public List<Map<String, Object>> executeQuery(String queryId, String fields) {
+    public List<Map<String, Object>> executeQuery(String connectionId, String queryId, String fields) {
+        JdbcTemplate jdbcTemplate = dataSourceRegistry.get(connectionId);
+
         QueryProperties.QueryDefinition definition = queryProperties.getDefinitions().get(queryId);
         if (definition == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
@@ -59,6 +63,12 @@ public class QueryService {
     public List<QueryInfo> listQueries() {
         return queryProperties.getDefinitions().entrySet().stream()
                 .map(e -> new QueryInfo(e.getKey(), e.getValue().getDescription()))
+                .collect(Collectors.toList());
+    }
+
+    public List<ConnectionInfo> listConnections() {
+        return dataSourceRegistry.getConnectionIds().stream()
+                .map(ConnectionInfo::new)
                 .collect(Collectors.toList());
     }
 }
