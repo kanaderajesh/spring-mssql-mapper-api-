@@ -89,6 +89,8 @@ All configuration lives in `src/main/resources/application.yaml`.
 
 Each entry under `databases.connections` gets its own connection pool. The map key is the **connection ID** used in the URL.
 
+#### SQL Server authentication (username + password)
+
 ```yaml
 databases:
   connections:
@@ -104,6 +106,37 @@ databases:
       password: YourPassword456
       driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
 ```
+
+#### Windows Authentication (Integrated Security)
+
+Add `integratedSecurity=true` to the URL and omit `username` / `password`. The connection uses the Windows identity of the process that runs the JVM — no credentials are stored in the config file.
+
+```yaml
+databases:
+  connections:
+    corp-db:
+      url: jdbc:sqlserver://corp-sql-server:1433;databaseName=corpdb;integratedSecurity=true;encrypt=false;trustServerCertificate=true
+      driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+```
+
+> **Native library required** — Windows Authentication relies on a native DLL that ships inside the MSSQL JDBC jar but must be extracted and placed on the Java library path before the JVM starts.
+>
+> 1. Locate `mssql-jdbc_auth-<version>-x64.dll` inside the jar (path: `auth/x64/`), or download it from the [Microsoft JDBC driver releases](https://learn.microsoft.com/en-us/sql/connect/jdbc/download-microsoft-jdbc-driver-for-sql-server).
+> 2. Copy the DLL to a folder, e.g. `C:\app\lib\`.
+> 3. Start the service with the library path set:
+>
+> ```bash
+> ./mvnw spring-boot:run -Djava.library.path="C:\app\lib"
+> ```
+>
+> Or set it permanently in `JAVA_TOOL_OPTIONS`:
+>
+> ```bash
+> set JAVA_TOOL_OPTIONS=-Djava.library.path=C:\app\lib
+> ```
+>
+> Without the DLL the driver throws:
+> `This driver is not configured for integrated authentication.`
 
 ### Registering SQL queries
 
