@@ -107,6 +107,40 @@ databases:
       driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
 ```
 
+#### Named instance (`server\instance`)
+
+When SQL Server is running as a named instance rather than the default instance, use `instanceName` in the URL **instead of a port number**. The SQL Server Browser service must be running on the host so the driver can resolve the instance to a dynamic port.
+
+```yaml
+databases:
+  connections:
+    named-instance-db:
+      url: jdbc:sqlserver://corp-sql-server;instanceName=SQLEXPRESS;databaseName=testdb;encrypt=false;trustServerCertificate=true
+      username: sa
+      password: YourPassword123
+      driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+```
+
+> **Port 1434 (UDP) must be open** — the JDBC driver contacts the SQL Server Browser on UDP 1434 to discover the dynamic TCP port assigned to the named instance. If a firewall blocks this, specify the port explicitly instead:
+>
+> ```yaml
+> url: jdbc:sqlserver://corp-sql-server:52918;databaseName=testdb;encrypt=false;trustServerCertificate=true
+> ```
+>
+> Run `netstat -ano | findstr LISTENING` on the server (or check SQL Server Configuration Manager) to find the port assigned to the instance.
+
+Named instances also work with Windows Authentication:
+
+```yaml
+databases:
+  connections:
+    named-instance-windows-auth:
+      url: jdbc:sqlserver://corp-sql-server;instanceName=SQLEXPRESS;databaseName=testdb;integratedSecurity=true;encrypt=false;trustServerCertificate=true
+      driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+```
+
+---
+
 #### Windows Authentication (Integrated Security)
 
 Add `integratedSecurity=true` to the URL and omit `username` / `password`. The connection uses the Windows identity of the process that runs the JVM — no credentials are stored in the config file.
