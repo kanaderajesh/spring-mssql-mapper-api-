@@ -3,6 +3,7 @@ package com.example.sqlmapper.controller;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -11,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.example.sqlmapper.model.ConnectionInfo;
+import com.example.sqlmapper.model.ConnectionTestResult;
 import com.example.sqlmapper.model.QueryInfo;
 import com.example.sqlmapper.service.QueryService;
 
@@ -31,6 +33,18 @@ public class QueryController {
     @GetMapping("/connections")
     public ResponseEntity<List<ConnectionInfo>> listConnections() {
         return ResponseEntity.ok(queryService.listConnections());
+    }
+
+    /**
+     * Test connectivity for a specific database connection.
+     * Returns 200 UP or 503 DOWN with response time and error detail.
+     * GET /api/connections/{connectionId}/test
+     */
+    @GetMapping("/connections/{connectionId}/test")
+    public ResponseEntity<ConnectionTestResult> testConnection(@PathVariable String connectionId) {
+        ConnectionTestResult result = queryService.testConnection(connectionId);
+        HttpStatus status = "UP".equals(result.getStatus()) ? HttpStatus.OK : HttpStatus.SERVICE_UNAVAILABLE;
+        return ResponseEntity.status(status).body(result);
     }
 
     /**

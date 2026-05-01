@@ -264,7 +264,76 @@ curl -s http://localhost:8080/api/connections
 
 ---
 
-### 2. List all registered queries
+### 2. Test a connection
+
+Executes `SELECT 1` against the target database and reports whether the connection is reachable, along with the round-trip time. Useful for verifying credentials, network access, and connection pool health without running a real query.
+
+```
+GET /api/connections/{connectionId}/test
+```
+
+| Parameter      | Type       | Required | Description                                    |
+|----------------|------------|----------|------------------------------------------------|
+| `connectionId` | path param | Yes      | Database connection ID from `application.yaml` |
+
+Returns `200 OK` when the connection is healthy, `503 Service Unavailable` when it is not — so HTTP-level monitors that only check the status code also work.
+
+#### curl — successful connection
+
+```bash
+curl -s http://localhost:8080/api/connections/primary-db/test
+```
+
+#### Response `200 OK`
+
+```json
+{
+  "connectionId": "primary-db",
+  "status": "UP",
+  "message": "Connection successful",
+  "responseTimeMs": 12
+}
+```
+
+#### curl — failed connection
+
+```bash
+curl -s http://localhost:8080/api/connections/analytics-db/test
+```
+
+#### Response `503 Service Unavailable`
+
+```json
+{
+  "connectionId": "analytics-db",
+  "status": "DOWN",
+  "message": "The TCP/IP connection to the host analytics-host, port 1433 has failed.",
+  "responseTimeMs": 5032
+}
+```
+
+#### curl — unknown connection ID
+
+```bash
+curl -s http://localhost:8080/api/connections/unknown-db/test
+```
+
+#### Response `404 Not Found`
+
+```json
+{
+  "status": 404,
+  "error": "Not Found",
+  "message": "Connection id 'unknown-db' is not configured",
+  "path": "/api/connections/unknown-db/test",
+  "timestamp": "2024-05-01T10:00:00Z"
+}
+```
+
+---
+
+### 3. List all registered queries
+
 
 Returns all configured query IDs and their descriptions.
 
@@ -291,7 +360,7 @@ curl -s http://localhost:8080/api/queries
 
 ---
 
-### 3. Execute a query — all columns
+### 4. Execute a query — all columns
 
 Runs the SQL registered under `{queryId}` on the database identified by `{connectionId}` and returns every column.
 
@@ -337,7 +406,7 @@ curl -s http://localhost:8080/api/query/analytics-db/get-all-users
 
 ---
 
-### 4. Execute a query — selected columns only
+### 5. Execute a query — selected columns only
 
 Same as above but the response is filtered to the columns listed in `fields`. Column matching is **case-insensitive**.
 

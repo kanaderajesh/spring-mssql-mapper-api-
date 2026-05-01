@@ -15,6 +15,7 @@ import org.springframework.web.server.ResponseStatusException;
 import com.example.sqlmapper.config.DataSourceRegistry;
 import com.example.sqlmapper.config.QueryProperties;
 import com.example.sqlmapper.model.ConnectionInfo;
+import com.example.sqlmapper.model.ConnectionTestResult;
 import com.example.sqlmapper.model.QueryInfo;
 
 @Service
@@ -70,5 +71,19 @@ public class QueryService {
         return dataSourceRegistry.getConnectionIds().stream()
                 .map(ConnectionInfo::new)
                 .collect(Collectors.toList());
+    }
+
+    public ConnectionTestResult testConnection(String connectionId) {
+        JdbcTemplate jdbcTemplate = dataSourceRegistry.get(connectionId);
+        long start = System.currentTimeMillis();
+        try {
+            jdbcTemplate.queryForObject("SELECT 1", Integer.class);
+            long elapsed = System.currentTimeMillis() - start;
+            return new ConnectionTestResult(connectionId, "UP", "Connection successful", elapsed);
+        } catch (Exception ex) {
+            long elapsed = System.currentTimeMillis() - start;
+            Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+            return new ConnectionTestResult(connectionId, "DOWN", cause.getMessage(), elapsed);
+        }
     }
 }
